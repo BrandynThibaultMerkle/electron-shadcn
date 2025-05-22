@@ -131,9 +131,21 @@ export function DataFilters({
 
     if (boolCount > 0 && boolCount === values.length) return "boolean";
 
+    // Check for currency values (values with $ or other currency symbols)
+    const currencyCount = values.filter((val) => {
+      if (typeof val === "string") {
+        return /^\s*[£$€¥]\s*[\d,.]+\s*$/.test(val);
+      }
+      return false;
+    }).length;
+
+    if (currencyCount > values.length * 0.5) return "number";
+
     // Check for dates
     const dateCount = values.filter((val) => {
       if (typeof val === "string") {
+        // Exclude values that start with currency symbols from date detection
+        if (/^\s*[£$€¥]/.test(val)) return false;
         return !isNaN(Date.parse(val));
       }
       return val instanceof Date;
@@ -141,12 +153,16 @@ export function DataFilters({
 
     if (dateCount > values.length * 0.5) return "date";
 
-    // Check for numbers
-    const numberCount = values.filter(
-      (val) =>
-        typeof val === "number" ||
-        (typeof val === "string" && !isNaN(Number(val))),
-    ).length;
+    // Check for numbers (including numbers with currency symbols)
+    const numberCount = values.filter((val) => {
+      if (typeof val === "number") return true;
+      if (typeof val === "string") {
+        // Try to extract numeric value from strings (including those with currency symbols)
+        const numericString = val.replace(/[^0-9.-]/g, "");
+        return numericString.length > 0 && !isNaN(Number(numericString));
+      }
+      return false;
+    }).length;
 
     if (numberCount > values.length * 0.7) return "number";
 

@@ -2,6 +2,10 @@ import React, { useState, useEffect, useMemo } from "react";
 import { FileUpload } from "@/components/FileUpload";
 import { DataPreview } from "@/components/DataPreview";
 import { DataFilters } from "@/components/DataFilters";
+import {
+  DataSanitization,
+  SanitizationOptions,
+} from "@/components/DataSanitization";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -50,8 +54,15 @@ interface ColumnFilter {
 export function TransformationPage() {
   const [file, setFile] = useState<File | null>(null);
   const [data, setData] = useState<any[]>([]);
+  const [sanitizedData, setSanitizedData] = useState<any[]>([]);
   const [filteredData, setFilteredData] = useState<any[]>([]);
   const [filters, setFilters] = useState<ColumnFilter[]>([]);
+  const [sanitizationOptions, setSanitizationOptions] =
+    useState<SanitizationOptions>({
+      removeSpecialChars: false,
+      replaceWithSpace: true,
+      sanitizeZipCodes: false,
+    });
   const [progress, setProgress] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
@@ -67,28 +78,91 @@ export function TransformationPage() {
 
   // Available columns for filtering
   const columns = useMemo(() => {
-    if (data.length === 0) return [];
-    return Object.keys(data[0] || {});
-  }, [data]);
+    if (sanitizedData.length === 0) return [];
+    return Object.keys(sanitizedData[0] || {});
+  }, [sanitizedData]);
 
-  // Update filtered data whenever raw data or filters change
+  // Apply sanitization to data when sanitization options change
+  useEffect(() => {
+    if (!data.length) {
+      setSanitizedData([]);
+      return;
+    }
+
+    const sanitizeData = async () => {
+      // Create a deep copy of the data
+      const result = JSON.parse(JSON.stringify(data));
+
+      // Apply sanitization based on options
+      if (sanitizationOptions.removeSpecialChars) {
+        result.forEach((row: any) => {
+          Object.keys(row).forEach((key) => {
+            if (typeof row[key] === "string") {
+              // Check if the field appears to be an email address
+              const isEmail =
+                /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(
+                  row[key],
+                );
+
+              // Check if the field is a currency value
+              const isCurrency = /^\s*[£$€¥]\s*[\d,.]+\s*$/.test(row[key]);
+
+              // Skip sanitization for email addresses and currency values
+              if (!isEmail && !isCurrency) {
+                if (sanitizationOptions.replaceWithSpace) {
+                  // Replace special chars with spaces
+                  row[key] = row[key]
+                    .replace(/[^\w\s]/g, " ")
+                    .replace(/\s+/g, " ")
+                    .trim();
+                } else {
+                  // Remove special chars
+                  row[key] = row[key].replace(/[^\w\s]/g, "");
+                }
+              }
+            }
+          });
+        });
+      }
+
+      if (sanitizationOptions.sanitizeZipCodes) {
+        result.forEach((row: any) => {
+          Object.keys(row).forEach((key) => {
+            if (typeof row[key] === "string") {
+              // Check if it looks like a ZIP code with extension (12345-1234)
+              const zipMatch = row[key].match(/^(\d{5})-\d{4}$/);
+              if (zipMatch) {
+                row[key] = zipMatch[1]; // Keep only the first 5 digits
+              }
+            }
+          });
+        });
+      }
+
+      setSanitizedData(result);
+    };
+
+    sanitizeData();
+  }, [data, sanitizationOptions]);
+
+  // Update filtered data whenever sanitized data or filters change
   useEffect(() => {
     applyFilters();
-  }, [data, filters]);
+  }, [sanitizedData, filters]);
 
-  // Apply filters to data
+  // Apply filters to sanitized data
   const applyFilters = () => {
-    if (!data.length) {
+    if (!sanitizedData.length) {
       setFilteredData([]);
       return;
     }
 
     if (!filters.length) {
-      setFilteredData(data);
+      setFilteredData(sanitizedData);
       return;
     }
 
-    const result = data.filter((row) => {
+    const result = sanitizedData.filter((row) => {
       return filters.every((filter) => {
         const { column, operation, value } = filter;
         const cellValue = row[column];
@@ -174,6 +248,11 @@ export function TransformationPage() {
     setFilters(newFilters);
   };
 
+  // Handle sanitization option changes
+  const handleSanitizationChange = (options: SanitizationOptions) => {
+    setSanitizationOptions(options);
+  };
+
   // Clear all filters
   const clearFilters = () => {
     setFilters([]);
@@ -224,7 +303,7 @@ export function TransformationPage() {
 
       setProgress(80);
       setData(loadedData);
-      setFilteredData(loadedData); // Initialize filtered data with all data
+      setSanitizedData(loadedData); // Initialize sanitized data with all data
 
       // Initialize selected columns with all available columns
       if (loadedData.length > 0) {
@@ -324,7 +403,7 @@ export function TransformationPage() {
 
       setProgress(80);
       setData(loadedData);
-      setFilteredData(loadedData); // Reset filtered data
+      setSanitizedData(loadedData); // Reset sanitized data
 
       // Reset selected columns to all available columns
       if (loadedData.length > 0) {
@@ -576,6 +655,7 @@ export function TransformationPage() {
                   onClick={() => {
                     setFile(null);
                     setData([]);
+                    setSanitizedData([]);
                     setFilteredData([]);
                     setFilters([]);
                     setSkipRows(0);
@@ -587,158 +667,172 @@ export function TransformationPage() {
                 <Button onClick={handleDownload} disabled={isProcessing}>
                   <Download className="mr-2 size-4" />
                   Download{" "}
-                  {filteredData.length !== data.length
-                    ? `(${filteredData.length}/${data.length} rows)`
+                  {filteredData.length !== sanitizedData.length
+                    ? `(${filteredData.length}/${sanitizedData.length} rows)`
                     : `(${selectedColumns.length} columns)`}
                 </Button>
               </div>
             </div>
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-              {/* Left column - File info, header controls, and filters */}
-              <div className="space-y-4 md:col-span-1">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>File Information</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid gap-2">
-                      <div>
-                        <span className="font-semibold">File Name:</span>{" "}
-                        {file.name}
+              {/* Left column - File info, header controls, sanitization and filters */}
+              <div className="relative md:col-span-1">
+                <div className="sticky top-0 max-h-[calc(100vh-120px)] space-y-4 overflow-y-auto pr-2">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>File Information</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid gap-2">
+                        <div>
+                          <span className="font-semibold">File Name:</span>{" "}
+                          {file.name}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Size:</span>{" "}
+                          {(file.size / 1024).toFixed(1)} KB
+                        </div>
+                        <div>
+                          <span className="font-semibold">Type:</span>{" "}
+                          {file.type || "Unknown"}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Rows:</span>{" "}
+                          <Tooltip>
+                            <TooltipTrigger className="underline decoration-dotted">
+                              {filteredData.length}/{sanitizedData.length}
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              {filteredData.length} rows displayed out of{" "}
+                              {sanitizedData.length} total rows
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
+                        <div>
+                          <span className="font-semibold">
+                            Selected Columns:
+                          </span>{" "}
+                          {selectedColumns.length} of{" "}
+                          {sanitizedData.length > 0
+                            ? Object.keys(sanitizedData[0]).length
+                            : 0}
+                        </div>
                       </div>
-                      <div>
-                        <span className="font-semibold">Size:</span>{" "}
-                        {(file.size / 1024).toFixed(1)} KB
-                      </div>
-                      <div>
-                        <span className="font-semibold">Type:</span>{" "}
-                        {file.type || "Unknown"}
-                      </div>
-                      <div>
-                        <span className="font-semibold">Rows:</span>{" "}
-                        <Tooltip>
-                          <TooltipTrigger className="underline decoration-dotted">
-                            {filteredData.length}/{data.length}
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            {filteredData.length} rows displayed out of{" "}
-                            {data.length} total rows
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <div>
-                        <span className="font-semibold">Selected Columns:</span>{" "}
-                        {selectedColumns.length} of{" "}
-                        {data.length > 0 ? Object.keys(data[0]).length : 0}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                    </CardContent>
+                  </Card>
 
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Header Settings</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="flex items-center space-x-2">
-                      <Label
-                        htmlFor="auto-detect"
-                        className="flex items-center gap-2"
-                      >
-                        Auto-detect headers
-                        <Tooltip>
-                          <TooltipTrigger>
-                            <HelpCircle className="text-muted-foreground h-4 w-4" />
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            Try to automatically detect which row contains
-                            column headers
-                          </TooltipContent>
-                        </Tooltip>
-                      </Label>
-                      <Switch
-                        id="auto-detect"
-                        checked={autoDetectHeaders}
-                        onCheckedChange={(checked) => {
-                          setAutoDetectHeaders(checked);
-                        }}
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <div className="space-y-2">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Header Settings</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="flex items-center space-x-2">
                         <Label
-                          htmlFor="header-row"
+                          htmlFor="auto-detect"
                           className="flex items-center gap-2"
                         >
-                          Header row
+                          Auto-detect headers
                           <Tooltip>
                             <TooltipTrigger>
                               <HelpCircle className="text-muted-foreground h-4 w-4" />
                             </TooltipTrigger>
                             <TooltipContent>
-                              <p>
-                                Row that contains column headers (0-based index)
-                              </p>
-                              <p className="font-bold">
-                                Example: If your table headers are on row 4,
-                                enter 3
-                              </p>
+                              Try to automatically detect which row contains
+                              column headers
                             </TooltipContent>
                           </Tooltip>
                         </Label>
-                        <Input
-                          id="header-row"
-                          type="number"
-                          min="0"
-                          value={headerRow}
-                          onChange={(e) => {
-                            setHeaderRow(Number(e.target.value));
-                            if (autoDetectHeaders) setAutoDetectHeaders(false);
+                        <Switch
+                          id="auto-detect"
+                          checked={autoDetectHeaders}
+                          onCheckedChange={(checked) => {
+                            setAutoDetectHeaders(checked);
                           }}
                         />
-                        <p className="text-muted-foreground text-xs">
-                          Current setting: Using row {headerRow} (Excel row{" "}
-                          {headerRow + 1}) as headers
-                        </p>
                       </div>
 
-                      <Button
-                        className="mt-4 w-full"
-                        onClick={handleReloadWithOptions}
-                        disabled={isProcessing}
-                      >
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        Apply Settings
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
+                      <div className="space-y-2">
+                        <div className="space-y-2">
+                          <Label
+                            htmlFor="header-row"
+                            className="flex items-center gap-2"
+                          >
+                            Header row
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <HelpCircle className="text-muted-foreground h-4 w-4" />
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>
+                                  Row that contains column headers (0-based
+                                  index)
+                                </p>
+                                <p className="font-bold">
+                                  Example: If your table headers are on row 4,
+                                  enter 3
+                                </p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </Label>
+                          <Input
+                            id="header-row"
+                            type="number"
+                            min="0"
+                            value={headerRow}
+                            onChange={(e) => {
+                              setHeaderRow(Number(e.target.value));
+                              if (autoDetectHeaders)
+                                setAutoDetectHeaders(false);
+                            }}
+                          />
+                          <p className="text-muted-foreground text-xs">
+                            Current setting: Using row {headerRow} (Excel row{" "}
+                            {headerRow + 1}) as headers
+                          </p>
+                        </div>
 
-                {data.length > 0 && (
-                  <>
-                    {/* Data Filters */}
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-lg font-semibold">Data Filters</h3>
-                      {filters.length > 0 && (
                         <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={clearFilters}
-                          className="text-muted-foreground hover:text-foreground"
+                          className="mt-4 w-full"
+                          onClick={handleReloadWithOptions}
+                          disabled={isProcessing}
                         >
-                          <FilterX className="mr-1 h-4 w-4" /> Clear all
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                          Apply Settings
                         </Button>
-                      )}
-                    </div>
-                    <DataFilters
-                      data={data}
-                      columns={columns}
-                      onFilterChange={handleFilterChange}
-                    />
-                  </>
-                )}
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {sanitizedData.length > 0 && (
+                    <>
+                      {/* Data Sanitization */}
+                      <DataSanitization
+                        options={sanitizationOptions}
+                        onOptionsChange={handleSanitizationChange}
+                      />
+
+                      {/* Data Filters */}
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-lg font-semibold">Data Filters</h3>
+                        {filters.length > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={clearFilters}
+                            className="text-muted-foreground hover:text-foreground"
+                          >
+                            <FilterX className="mr-1 h-4 w-4" /> Clear all
+                          </Button>
+                        )}
+                      </div>
+                      <DataFilters
+                        data={sanitizedData}
+                        columns={columns}
+                        onFilterChange={handleFilterChange}
+                      />
+                    </>
+                  )}
+                </div>
               </div>
 
               {/* Right column - Data preview */}
@@ -746,8 +840,8 @@ export function TransformationPage() {
                 <DataPreview
                   data={filteredData}
                   title={`Excel Data ${
-                    filteredData.length !== data.length
-                      ? `(${filteredData.length}/${data.length} rows)`
+                    filteredData.length !== sanitizedData.length
+                      ? `(${filteredData.length}/${sanitizedData.length} rows)`
                       : ""
                   }`}
                   onColumnsChange={handleColumnSelectionChange}
