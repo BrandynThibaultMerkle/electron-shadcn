@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { FileUpload } from "@/components/FileUpload";
-import { DataPreview } from "@/components/DataPreview";
+import {
+  DataPreview,
+  ColumnSanitizationSettings,
+  ColumnType,
+} from "@/components/DataPreview";
 import { DataFilters } from "@/components/DataFilters";
 import {
   DataSanitization,
@@ -10,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/use-toast";
-import { Download, RefreshCw, Bug, FilterX } from "lucide-react";
+import { Download, RefreshCw, Bug, FilterX, FileType } from "lucide-react";
 import {
   ExcelTransformer,
   ExcelLoadOptions,
@@ -33,6 +37,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type RowInfo = {
   index: number;
@@ -50,6 +61,198 @@ interface ColumnFilter {
   operation: string;
   value: any;
 }
+
+/**
+ * Format a string as a phone number (123-456-7890)
+ */
+const formatPhoneNumber = (value: string): string => {
+  // Remove all non-digit characters
+  const digitsOnly = value.replace(/\D/g, "");
+
+  // Format based on length
+  if (digitsOnly.length === 10) {
+    // Standard 10-digit US phone number
+    return `${digitsOnly.slice(0, 3)}-${digitsOnly.slice(3, 6)}-${digitsOnly.slice(6)}`;
+  } else if (digitsOnly.length === 11 && digitsOnly.startsWith("1")) {
+    // US phone with country code
+    return `${digitsOnly.slice(1, 4)}-${digitsOnly.slice(4, 7)}-${digitsOnly.slice(7)}`;
+  } else {
+    // Other formats - try to format sensibly
+    if (digitsOnly.length >= 7) {
+      // At least has area code and local number
+      const localNumber = digitsOnly.slice(-7);
+      const areaCode = digitsOnly.slice(-10, -7);
+      const countryCode = digitsOnly.slice(0, -10);
+
+      if (areaCode) {
+        return countryCode
+          ? `${countryCode}-${areaCode}-${localNumber.slice(0, 3)}-${localNumber.slice(3)}`
+          : `${areaCode}-${localNumber.slice(0, 3)}-${localNumber.slice(3)}`;
+      } else {
+        // Just format with hyphens at standard positions
+        return `${localNumber.slice(0, 3)}-${localNumber.slice(3)}`;
+      }
+    }
+    // For very short numbers, return as is
+    return digitsOnly;
+  }
+};
+
+/**
+ * Format a string as a ZIP code
+ * @param value The value to format
+ * @param truncate Whether to truncate to 5 digits
+ */
+const formatZipCode = (value: string, truncate: boolean = false): string => {
+  // Remove all non-digit characters
+  const digitsOnly = value.replace(/\D/g, "");
+
+  // Check if we should truncate to 5 digits
+  if (truncate || digitsOnly.length <= 5) {
+    // Return just the first 5 digits (padded if shorter)
+    return digitsOnly.slice(0, 5).padEnd(5, "0");
+  } else if (digitsOnly.length <= 9) {
+    // ZIP+4 format
+    return `${digitsOnly.slice(0, 5)}-${digitsOnly.slice(5)}`;
+  } else {
+    // Truncate to ZIP+4 if longer
+    return `${digitsOnly.slice(0, 5)}-${digitsOnly.slice(5, 9)}`;
+  }
+};
+
+/**
+ * Format an email address (basic validation and lowercase)
+ */
+const formatEmailAddress = (value: string): string => {
+  // Trim and lowercase
+  return value.trim().toLowerCase();
+};
+
+/**
+ * Format currency value
+ */
+const formatCurrency = (value: string): string => {
+  // Keep dollar sign, commas, and decimal point
+  if (!/^[$¥€£]/.test(value)) {
+    // If no currency symbol, add dollar sign
+    return `$${value}`;
+  }
+  return value;
+};
+
+/**
+ * Format Social Security Number
+ */
+const formatSSN = (value: string): string => {
+  // Remove all non-digit characters
+  const digitsOnly = value.replace(/\D/g, "");
+
+  // Format as XXX-XX-XXXX
+  if (digitsOnly.length <= 3) {
+    return digitsOnly;
+  } else if (digitsOnly.length <= 5) {
+    return `${digitsOnly.slice(0, 3)}-${digitsOnly.slice(3)}`;
+  } else {
+    return `${digitsOnly.slice(0, 3)}-${digitsOnly.slice(3, 5)}-${digitsOnly.slice(5, 9)}`;
+  }
+};
+
+/**
+ * Try to detect the data type of a column based on its values
+ */
+const detectColumnType = (columnValues: string[]): ColumnType => {
+  // Ensure we have data to analyze
+  if (!columnValues || columnValues.length === 0) {
+    return "auto";
+  }
+
+  // Get non-empty values for analysis (max 100 for performance)
+  const sampleValues = columnValues
+    .filter((v) => v && typeof v === "string" && v.trim() !== "")
+    .slice(0, 100);
+
+  if (sampleValues.length === 0) {
+    return "auto";
+  }
+
+  // Count matches for each type
+  let zipMatches = 0;
+  let phoneMatches = 0;
+  let emailMatches = 0;
+  let currencyMatches = 0;
+  let ssnMatches = 0;
+  let dateMatches = 0;
+  let numberMatches = 0;
+
+  // Patterns for each type
+  const zipPattern = /^\d{5}(-\d{4})?$/;
+  const phonePattern =
+    /^(\+\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$/;
+  const emailPattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+  const currencyPattern = /^\s*[£$€¥]?\s*[\d,.]+\s*$/;
+  const ssnPattern = /^\d{3}-\d{2}-\d{4}$/;
+  const datePattern =
+    /^(\d{1,4}[-/\.]\d{1,2}[-/\.]\d{1,4})|(\d{1,2}[-/\.]\d{1,2}[-/\.]\d{2,4})$/;
+  const numberPattern = /^-?\d+(\.\d+)?$/;
+
+  // Check each value against patterns
+  sampleValues.forEach((value) => {
+    if (zipPattern.test(value)) zipMatches++;
+    if (phonePattern.test(value)) phoneMatches++;
+    if (emailPattern.test(value)) emailMatches++;
+    if (currencyPattern.test(value)) currencyMatches++;
+    if (ssnPattern.test(value)) ssnMatches++;
+    if (datePattern.test(value)) dateMatches++;
+    if (numberPattern.test(value)) numberMatches++;
+  });
+
+  // Calculate percentage matches
+  const total = sampleValues.length;
+  const zipPercent = (zipMatches / total) * 100;
+  const phonePercent = (phoneMatches / total) * 100;
+  const emailPercent = (emailMatches / total) * 100;
+  const currencyPercent = (currencyMatches / total) * 100;
+  const ssnPercent = (ssnMatches / total) * 100;
+  const datePercent = (dateMatches / total) * 100;
+  const numberPercent = (numberMatches / total) * 100;
+
+  // Determine the most likely type (must have at least 60% match)
+  const threshold = 60;
+
+  if (emailPercent >= threshold) return "email";
+  if (zipPercent >= threshold) return "zipcode";
+  if (phonePercent >= threshold) return "phone";
+  if (ssnPercent >= threshold) return "ssn";
+  if (currencyPercent >= threshold) return "currency";
+  if (datePercent >= threshold) return "date";
+  if (numberPercent >= threshold) return "number";
+
+  // Default to text if no strong pattern match
+  return "text";
+};
+
+/**
+ * Get default characters to preserve based on data type
+ */
+const getDefaultPreserveCharacters = (
+  type: ColumnType,
+  currentPreserved?: string,
+): string => {
+  switch (type) {
+    case "zipcode":
+      return "-";
+    case "phone":
+      return "()-. ";
+    case "email":
+      return "@._-";
+    case "currency":
+      return "$,.€£¥";
+    case "ssn":
+      return "-";
+    default:
+      return currentPreserved || "";
+  }
+};
 
 export function TransformationPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -75,6 +278,17 @@ export function TransformationPage() {
   const [showDebugDialog, setShowDebugDialog] = useState(false);
   const [excelPreview, setExcelPreview] = useState<any[][]>([]);
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
+  const [columnSanitizationSettings, setColumnSanitizationSettings] = useState<
+    Record<string, ColumnSanitizationSettings>
+  >({});
+  const [columnDisplayNames, setColumnDisplayNames] = useState<
+    Record<string, string>
+  >({});
+  const [downloadFormat, setDownloadFormat] = useState<"excel" | "csv">(
+    "excel",
+  );
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   // Available columns for filtering
   const columns = useMemo(() => {
@@ -93,41 +307,139 @@ export function TransformationPage() {
       // Create a deep copy of the data
       const result = JSON.parse(JSON.stringify(data));
 
-      // Apply sanitization based on options
-      if (sanitizationOptions.removeSpecialChars) {
-        result.forEach((row: any) => {
-          Object.keys(row).forEach((key) => {
-            if (typeof row[key] === "string") {
-              // Check if the field appears to be an email address
-              const isEmail =
-                /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(
+      // Process each row and column
+      result.forEach((row: any) => {
+        Object.keys(row).forEach((key) => {
+          // Skip columns where sanitization is disabled or columns that aren't selected
+          if (
+            columnSanitizationSettings[key]?.enableSanitization === false ||
+            !selectedColumns.includes(key)
+          ) {
+            return;
+          }
+
+          // Get column type
+          const columnType =
+            columnSanitizationSettings[key]?.columnType || "auto";
+
+          // Apply specialized formatting based on column type
+          if (typeof row[key] === "string") {
+            // Skip empty values
+            if (!row[key].trim()) return;
+
+            switch (columnType) {
+              case "zipcode":
+                // Format ZIP code - truncate if sanitizeZipCodes is enabled
+                row[key] = formatZipCode(
                   row[key],
+                  sanitizationOptions.sanitizeZipCodes,
                 );
+                break;
 
-              // Check if the field is a currency value
-              const isCurrency = /^\s*[£$€¥]\s*[\d,.]+\s*$/.test(row[key]);
+              case "phone":
+                // Format phone number
+                row[key] = formatPhoneNumber(row[key]);
+                break;
 
-              // Skip sanitization for email addresses and currency values
-              if (!isEmail && !isCurrency) {
-                if (sanitizationOptions.replaceWithSpace) {
-                  // Replace special chars with spaces
-                  row[key] = row[key]
-                    .replace(/[^\w\s]/g, " ")
-                    .replace(/\s+/g, " ")
-                    .trim();
-                } else {
-                  // Remove special chars
-                  row[key] = row[key].replace(/[^\w\s]/g, "");
+              case "email":
+                // Format email address
+                row[key] = formatEmailAddress(row[key]);
+                break;
+
+              case "currency":
+                // Format currency
+                row[key] = formatCurrency(row[key]);
+                break;
+
+              case "ssn":
+                // Format SSN
+                row[key] = formatSSN(row[key]);
+                break;
+
+              default:
+                // Check if it's an email address (auto detection)
+                const isEmail =
+                  columnType === "auto" &&
+                  /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(
+                    row[key],
+                  );
+
+                // Check if it's a currency value (auto detection)
+                const isCurrency =
+                  columnType === "auto" &&
+                  /^\s*[£$€¥]\s*[\d,.]+\s*$/.test(row[key]);
+
+                // Check if it looks like a phone number (auto detection)
+                const isPhone =
+                  columnType === "auto" &&
+                  /^(\+\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$/.test(
+                    row[key],
+                  );
+
+                // Check if it looks like a ZIP code (auto detection)
+                const isZip =
+                  columnType === "auto" && /^\d{5}(-\d{4})?$/.test(row[key]);
+
+                // Apply general sanitization if not a special format
+                if (isEmail) {
+                  row[key] = formatEmailAddress(row[key]);
+                } else if (isCurrency) {
+                  row[key] = formatCurrency(row[key]);
+                } else if (isPhone) {
+                  row[key] = formatPhoneNumber(row[key]);
+                } else if (isZip) {
+                  row[key] = formatZipCode(
+                    row[key],
+                    sanitizationOptions.sanitizeZipCodes,
+                  );
+                } else if (sanitizationOptions.removeSpecialChars) {
+                  // Get preserved characters for this column
+                  const preservedChars =
+                    columnSanitizationSettings[key]?.preserveCharacters || "";
+
+                  // Create a regex pattern that excludes alphanumerics, whitespace, and preserved chars
+                  let pattern = "[^\\w\\s";
+                  if (preservedChars) {
+                    // Escape special characters for regex
+                    const escapedChars = preservedChars.replace(
+                      /[-[\]{}()*+?.,\\^$|#]/g,
+                      "\\$&",
+                    );
+                    pattern += escapedChars;
+                  }
+                  pattern += "]";
+
+                  const regex = new RegExp(pattern, "g");
+
+                  if (sanitizationOptions.replaceWithSpace) {
+                    // Replace special chars with spaces
+                    row[key] = row[key]
+                      .replace(regex, " ")
+                      .replace(/\s+/g, " ")
+                      .trim();
+                  } else {
+                    // Remove special chars
+                    row[key] = row[key].replace(regex, "");
+                  }
                 }
-              }
             }
-          });
+          }
         });
-      }
+      });
 
+      // Apply ZIP code sanitization for columns without special type
       if (sanitizationOptions.sanitizeZipCodes) {
         result.forEach((row: any) => {
           Object.keys(row).forEach((key) => {
+            // Skip if column has specialized type or sanitization disabled
+            if (
+              columnSanitizationSettings[key]?.columnType !== undefined ||
+              columnSanitizationSettings[key]?.enableSanitization === false ||
+              !selectedColumns.includes(key)
+            ) {
+              return;
+            }
+
             if (typeof row[key] === "string") {
               // Check if it looks like a ZIP code with extension (12345-1234)
               const zipMatch = row[key].match(/^(\d{5})-\d{4}$/);
@@ -143,7 +455,7 @@ export function TransformationPage() {
     };
 
     sanitizeData();
-  }, [data, sanitizationOptions]);
+  }, [data, sanitizationOptions, columnSanitizationSettings, selectedColumns]);
 
   // Update filtered data whenever sanitized data or filters change
   useEffect(() => {
@@ -307,7 +619,56 @@ export function TransformationPage() {
 
       // Initialize selected columns with all available columns
       if (loadedData.length > 0) {
-        setSelectedColumns(Object.keys(loadedData[0]));
+        const newColumns = Object.keys(loadedData[0]);
+        setSelectedColumns(newColumns);
+
+        // Preserve existing filters for columns that still exist
+        if (filters.length > 0) {
+          const updatedFilters = filters.filter((filter) =>
+            newColumns.includes(filter.column),
+          );
+          setFilters(updatedFilters);
+        }
+      }
+
+      // Auto-detect column types for better user experience
+      const detectedColumnTypes: Record<string, ColumnType> = {};
+      Object.keys(loadedData[0]).forEach((column) => {
+        // Get column values for type detection
+        const columnValues = loadedData
+          .map((row) => row[column])
+          .filter(Boolean);
+        const detectedType = detectColumnType(columnValues);
+
+        // Only set type if it's not "auto" or "text"
+        if (detectedType !== "auto" && detectedType !== "text") {
+          detectedColumnTypes[column] = detectedType;
+        }
+      });
+
+      // If we detected any specific types, update column settings
+      if (Object.keys(detectedColumnTypes).length > 0) {
+        const newColumnSettings = { ...columnSanitizationSettings };
+
+        Object.entries(detectedColumnTypes).forEach(([column, type]) => {
+          newColumnSettings[column] = {
+            ...newColumnSettings[column],
+            columnType: type,
+            enableSanitization: true,
+            preserveCharacters: getDefaultPreserveCharacters(
+              type,
+              newColumnSettings[column]?.preserveCharacters,
+            ),
+          };
+        });
+
+        setColumnSanitizationSettings(newColumnSettings);
+
+        // Show notification about detected types
+        toast({
+          title: "Column types detected",
+          description: `Detected specialized formats for ${Object.keys(detectedColumnTypes).length} columns`,
+        });
       }
 
       toast({
@@ -407,7 +768,16 @@ export function TransformationPage() {
 
       // Reset selected columns to all available columns
       if (loadedData.length > 0) {
-        setSelectedColumns(Object.keys(loadedData[0]));
+        const newColumns = Object.keys(loadedData[0]);
+        setSelectedColumns(newColumns);
+
+        // Preserve existing filters for columns that still exist
+        if (filters.length > 0) {
+          const updatedFilters = filters.filter((filter) =>
+            newColumns.includes(filter.column),
+          );
+          setFilters(updatedFilters);
+        }
       }
 
       toast({
@@ -430,7 +800,43 @@ export function TransformationPage() {
 
   // Handle column selection change
   const handleColumnSelectionChange = (columns: string[]) => {
+    // Store previous selection for comparison
+    const previousSelection = selectedColumns;
+
+    // Update selected columns
     setSelectedColumns(columns);
+
+    // If columns were removed, check if any filters need to be removed
+    if (previousSelection.length > columns.length) {
+      const removedColumns = previousSelection.filter(
+        (col) => !columns.includes(col),
+      );
+
+      // If we have filters for removed columns, filter them out
+      if (
+        removedColumns.length > 0 &&
+        filters.some((f) => removedColumns.includes(f.column))
+      ) {
+        const updatedFilters = filters.filter(
+          (f) => !removedColumns.includes(f.column),
+        );
+        setFilters(updatedFilters);
+      }
+
+      // Also clean up any column sanitization settings for removed columns
+      if (
+        removedColumns.length > 0 &&
+        Object.keys(columnSanitizationSettings).some((col) =>
+          removedColumns.includes(col),
+        )
+      ) {
+        const updatedSettings = { ...columnSanitizationSettings };
+        removedColumns.forEach((col) => {
+          delete updatedSettings[col];
+        });
+        setColumnSanitizationSettings(updatedSettings);
+      }
+    }
   };
 
   // Handle file download
@@ -445,54 +851,119 @@ export function TransformationPage() {
     }
 
     try {
-      setIsProcessing(true);
-      setProgress(20);
+      setIsDownloading(true);
+      setDownloadProgress(10);
 
       // Get the filename without extension
-      const outputFilename = file.name.replace(/\.[^/.]+$/, "") + "_clean";
+      const outputFilename = file.name.replace(/\.[^/.]+$/, "") + "_processed";
 
-      // Use filtered data and only include selected columns
+      // Create a new array with renamed columns and only selected columns
       const dataToExport = filteredData.map((row) => {
         const newRow: Record<string, any> = {};
         selectedColumns.forEach((col) => {
-          newRow[col] = row[col];
+          // Use the display name (renamed column) as the column header in export
+          const displayName = columnDisplayNames[col] || col;
+          newRow[displayName] = row[col];
         });
         return newRow;
       });
 
-      // Update the transformer with filtered data
+      setDownloadProgress(40);
+
+      // Update the transformer with the processed data
       transformer.setData(dataToExport);
 
-      // Export to Excel
-      const blob = transformer.exportToExcel(outputFilename);
-      setProgress(80);
+      let blob: Blob;
+      let extension: string;
+
+      // Export based on selected format
+      if (downloadFormat === "csv") {
+        // Convert to CSV
+        extension = "csv";
+        setDownloadProgress(60);
+
+        // Simple CSV conversion - could be enhanced with a proper CSV library
+        const headers = Object.keys(dataToExport[0] || {}).join(",");
+        const rows = dataToExport.map((row) =>
+          Object.values(row)
+            .map((value) =>
+              typeof value === "string"
+                ? `"${value.replace(/"/g, '""')}"`
+                : value,
+            )
+            .join(","),
+        );
+        const csvContent = [headers, ...rows].join("\n");
+
+        blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      } else {
+        // Export to Excel
+        extension = "xlsx";
+        setDownloadProgress(60);
+        blob = transformer.exportToExcel(outputFilename, {
+          sheetName: "Processed Data",
+          styleHeaders: true,
+          autoWidth: true,
+        });
+      }
+
+      setDownloadProgress(80);
 
       // Create download link
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.setAttribute("download", `${outputFilename}.xlsx`);
+      link.setAttribute("download", `${outputFilename}.${extension}`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
 
-      setProgress(100);
+      setDownloadProgress(100);
+
+      // Show success message
       toast({
-        title: "Success",
-        description: `File saved as ${outputFilename}.xlsx with ${selectedColumns.length} columns and ${dataToExport.length} rows`,
+        title: "Download successful",
+        description: `File saved as ${outputFilename}.${extension} with ${selectedColumns.length} columns and ${dataToExport.length} rows`,
       });
+
+      // Reset download progress after a delay
+      setTimeout(() => {
+        setDownloadProgress(0);
+        setIsDownloading(false);
+      }, 1000);
     } catch (error) {
       console.error("Error downloading file:", error);
+      setIsDownloading(false);
+      setDownloadProgress(0);
+
       toast({
-        title: "Error",
+        title: "Download failed",
         description:
           "Failed to download file: " +
           (error instanceof Error ? error.message : String(error)),
         variant: "destructive",
       });
-    } finally {
-      setIsProcessing(false);
     }
+  };
+
+  // Handle column sanitization settings change
+  const handleColumnSanitizationChange = (
+    column: string,
+    settings: ColumnSanitizationSettings,
+  ) => {
+    setColumnSanitizationSettings((prev) => ({
+      ...prev,
+      [column]: settings,
+    }));
+  };
+
+  // Handle column rename
+  const handleColumnRename = (oldName: string, newName: string) => {
+    // Store display name mapping
+    setColumnDisplayNames((prev) => ({
+      ...prev,
+      [oldName]: newName,
+    }));
   };
 
   return (
@@ -664,13 +1135,6 @@ export function TransformationPage() {
                 >
                   Upload New File
                 </Button>
-                <Button onClick={handleDownload} disabled={isProcessing}>
-                  <Download className="mr-2 size-4" />
-                  Download{" "}
-                  {filteredData.length !== sanitizedData.length
-                    ? `(${filteredData.length}/${sanitizedData.length} rows)`
-                    : `(${selectedColumns.length} columns)`}
-                </Button>
               </div>
             </div>
 
@@ -828,6 +1292,7 @@ export function TransformationPage() {
                       <DataFilters
                         data={sanitizedData}
                         columns={columns}
+                        visibleColumns={selectedColumns}
                         onFilterChange={handleFilterChange}
                       />
                     </>
@@ -845,7 +1310,79 @@ export function TransformationPage() {
                       : ""
                   }`}
                   onColumnsChange={handleColumnSelectionChange}
+                  onColumnRename={handleColumnRename}
+                  onColumnSanitizationChange={handleColumnSanitizationChange}
+                  sanitizationOptions={sanitizationOptions}
+                  columnSanitizationSettings={columnSanitizationSettings}
                 />
+
+                {data.length > 0 && (
+                  <Card className="mt-4">
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="text-lg font-medium">
+                            Download Processed Data
+                          </h3>
+                          <p className="text-muted-foreground text-sm">
+                            Export your filtered and sanitized data in your
+                            preferred format
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Select
+                            value={downloadFormat}
+                            onValueChange={(value: "excel" | "csv") =>
+                              setDownloadFormat(value)
+                            }
+                          >
+                            <SelectTrigger className="w-[140px]">
+                              <SelectValue placeholder="Format" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="excel">
+                                Excel (.xlsx)
+                              </SelectItem>
+                              <SelectItem value="csv">CSV</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            onClick={handleDownload}
+                            disabled={
+                              isProcessing ||
+                              isDownloading ||
+                              filteredData.length === 0
+                            }
+                            size="lg"
+                          >
+                            {isDownloading ? (
+                              <>
+                                <FileType className="mr-2 size-4 animate-pulse" />
+                                Exporting...
+                              </>
+                            ) : (
+                              <>
+                                <Download className="mr-2 size-4" />
+                                Download{" "}
+                                {filteredData.length !== sanitizedData.length
+                                  ? `(${filteredData.length} rows)`
+                                  : `(${selectedColumns.length} columns)`}
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                      {isDownloading && (
+                        <div className="mt-4">
+                          <Progress value={downloadProgress} />
+                          <p className="mt-2 text-center text-sm">
+                            Preparing download... {downloadProgress}%
+                          </p>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
 
                 {isProcessing && (
                   <div className="mt-4 flex flex-col gap-2">

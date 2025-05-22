@@ -11,6 +11,16 @@ export interface ExcelLoadOptions {
 }
 
 /**
+ * Options for exporting Excel files
+ */
+export interface ExcelExportOptions {
+  sheetName?: string; // Name for the sheet (defaults to "Sheet1")
+  styleHeaders?: boolean; // Apply styling to header row
+  autoWidth?: boolean; // Auto-adjust column widths
+  dateFormat?: string; // Format string for dates (e.g., 'yyyy-mm-dd')
+}
+
+/**
  * Simple transformer for Excel files
  */
 export class ExcelTransformer {
@@ -174,18 +184,38 @@ export class ExcelTransformer {
   /**
    * Export the data to an Excel file
    * @param filename The name of the file to export
+   * @param options Export options
    * @returns A Blob containing the Excel file
    */
-  exportToExcel(filename: string = "export.xlsx"): Blob {
+  exportToExcel(
+    filename: string = "export.xlsx",
+    options: ExcelExportOptions = {},
+  ): Blob {
     try {
+      const {
+        sheetName = "Sheet1",
+        styleHeaders = true,
+        autoWidth = true,
+      } = options;
+
       // Create a new workbook
       const workbook = XLSX.utils.book_new();
 
       // Create a worksheet from the data
       const worksheet = XLSX.utils.json_to_sheet(this.data);
 
+      // Apply auto width if requested
+      if (autoWidth && this.data.length > 0) {
+        this.applyAutoWidth(worksheet);
+      }
+
+      // Apply header styling if requested
+      if (styleHeaders && this.data.length > 0) {
+        this.applyHeaderStyling(worksheet);
+      }
+
       // Add the worksheet to the workbook
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
+      XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
 
       // Generate the Excel file
       const excelBuffer = XLSX.write(workbook, {
@@ -203,6 +233,88 @@ export class ExcelTransformer {
         `Failed to export to Excel: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+
+  /**
+   * Apply auto width to columns based on content
+   * @param worksheet The worksheet to modify
+   */
+  private applyAutoWidth(worksheet: XLSX.WorkSheet): void {
+    const data = this.data;
+    if (!data || data.length === 0) return;
+
+    // Get all column names
+    const columnNames = Object.keys(data[0]);
+
+    // Calculate width based on header and data content
+    const columnWidths: { [key: string]: number } = {};
+
+    // Check header widths
+    columnNames.forEach((colName) => {
+      // Start with the header length (plus some padding)
+      columnWidths[colName] = Math.min(50, colName.length + 2);
+    });
+
+    // Check data widths (sample up to 100 rows for performance)
+    const sampleSize = Math.min(100, data.length);
+    for (let i = 0; i < sampleSize; i++) {
+      const row = data[i];
+      columnNames.forEach((colName) => {
+        const cellValue = row[colName];
+        if (cellValue !== null && cellValue !== undefined) {
+          const cellValueLength = String(cellValue).length;
+          // Update width to max of current width or cell content width
+          columnWidths[colName] = Math.max(
+            columnWidths[colName],
+            Math.min(50, cellValueLength + 1), // Cap at 50 characters
+          );
+        }
+      });
+    }
+
+    // Set column widths
+    const cols: XLSX.ColInfo[] = [];
+    columnNames.forEach((colName, idx) => {
+      cols.push({
+        wch: columnWidths[colName],
+      });
+    });
+
+    worksheet["!cols"] = cols;
+  }
+
+  /**
+   * Apply styling to the header row
+   * @param worksheet The worksheet to modify
+   */
+  private applyHeaderStyling(worksheet: XLSX.WorkSheet): void {
+    // In XLSX, we need to set the style for each cell individually
+    // For header row (A1, B1, etc.)
+    const data = this.data;
+    if (!data || data.length === 0) return;
+
+    const columnNames = Object.keys(data[0]);
+    const headerRow = {} as Record<string, XLSX.CellObject>;
+
+    // For older versions of XLSX, we can just manipulate the cell styles directly
+    // Get first row (A1, B1, etc.)
+    columnNames.forEach((col, idx) => {
+      const cellRef = XLSX.utils.encode_cell({ r: 0, c: idx });
+      // Get existing cell or create new one
+      const cell = worksheet[cellRef] || { t: "s", v: col };
+
+      // Add bold formatting to headers
+      cell.s = {
+        font: { bold: true },
+        alignment: { horizontal: "center" },
+        fill: { fgColor: { rgb: "EFEFEF" } },
+      };
+
+      headerRow[cellRef] = cell;
+    });
+
+    // Merge with existing cells
+    Object.assign(worksheet, headerRow);
   }
 
   /**

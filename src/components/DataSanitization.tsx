@@ -13,7 +13,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { HelpCircle } from "lucide-react";
+import { HelpCircle, Settings } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import {
   Collapsible,
@@ -22,7 +22,14 @@ import {
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { ChevronDown } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardFooter,
+} from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export interface SanitizationOptions {
   removeSpecialChars: boolean;
@@ -121,6 +128,8 @@ export function DataSanitization({
                   Removes hyphens and the last 4 digits from ZIP+4 codes
                   <br />
                   (e.g., 12345-6789 becomes 12345)
+                  <br />
+                  Applies to all columns including those set to ZIP code type
                 </p>
               </TooltipContent>
             </Tooltip>
@@ -377,6 +386,19 @@ export function DataSanitization({
           </CollapsibleContent>
         </Collapsible>
       </CardContent>
+
+      <CardFooter className="px-6 pb-4">
+        <Alert variant="outline" className="bg-muted/50">
+          <div className="flex items-center gap-2">
+            <Settings className="text-muted-foreground h-4 w-4" />
+            <AlertDescription className="text-muted-foreground text-xs">
+              For column-specific settings, click the settings icon{" "}
+              <Settings className="inline h-3 w-3" /> above each column header
+              in the data table.
+            </AlertDescription>
+          </div>
+        </Alert>
+      </CardFooter>
     </Card>
   );
 }

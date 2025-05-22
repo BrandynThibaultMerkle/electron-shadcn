@@ -83,13 +83,15 @@ interface ColumnStats {
 interface DataFilterProps {
   data: any[];
   columns: string[];
+  visibleColumns?: string[];
   onFilterChange: (filters: ColumnFilter[]) => void;
-  maxSampleSize?: number; // Limit the number of rows to analyze for performance
+  maxSampleSize?: number;
 }
 
 export function DataFilters({
   data,
   columns,
+  visibleColumns = columns,
   onFilterChange,
   maxSampleSize = 1000,
 }: DataFilterProps) {
@@ -104,6 +106,11 @@ export function DataFilters({
   const [loadingColumn, setLoadingColumn] = useState<string | null>(null);
   const [expandedColumns, setExpandedColumns] = useState<string[]>([]);
   const [comboboxOpen, setComboboxOpen] = useState<Record<string, boolean>>({});
+
+  // Filter out columns that aren't visible
+  const displayableColumns = columns.filter((column) =>
+    visibleColumns.includes(column),
+  );
 
   // Helper function to detect column type
   const detectColumnType = (column: string, sampleData: any[]): ColumnType => {
@@ -757,6 +764,11 @@ export function DataFilters({
     return (
       <div className="space-y-4">
         {activeFilters.map((filter, index) => {
+          // Skip rendering filters for columns that are no longer visible
+          if (!visibleColumns.includes(filter.column)) {
+            return null;
+          }
+
           const operations = getAvailableOperations(filter.type);
 
           return (
@@ -810,7 +822,7 @@ export function DataFilters({
 
         {/* Add new filter section */}
         <Accordion type="multiple" className="w-full">
-          {columns.map((column) => (
+          {displayableColumns.map((column) => (
             <AccordionItem key={column} value={column}>
               <AccordionTrigger
                 onClick={() => handleAccordionChange(column)}

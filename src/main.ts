@@ -16,8 +16,8 @@ app.commandLine.appendSwitch("js-flags", "--max-old-space-size=8192");
 function createWindow() {
   const preload = path.join(__dirname, "preload.js");
   const mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 1500,
+    height: 1000,
     webPreferences: {
       devTools: inDevelopment,
       contextIsolation: true,
