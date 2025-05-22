@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { FileUpload } from "@/components/FileUpload";
 import { DataPreview } from "@/components/DataPreview";
+import { DataFilters } from "@/components/DataFilters";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/use-toast";
-import { Download, RefreshCw, Bug } from "lucide-react";
+import { Download, RefreshCw, Bug, FilterX } from "lucide-react";
 import {
   ExcelTransformer,
   ExcelLoadOptions,
@@ -38,9 +39,19 @@ type RowInfo = {
   stringPercent: number;
 };
 
+// Column filter type from DataFilters component
+interface ColumnFilter {
+  column: string;
+  type: string;
+  operation: string;
+  value: any;
+}
+
 export function TransformationPage() {
   const [file, setFile] = useState<File | null>(null);
   const [data, setData] = useState<any[]>([]);
+  const [filteredData, setFilteredData] = useState<any[]>([]);
+  const [filters, setFilters] = useState<ColumnFilter[]>([]);
   const [progress, setProgress] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
@@ -54,6 +65,120 @@ export function TransformationPage() {
   const [excelPreview, setExcelPreview] = useState<any[][]>([]);
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
 
+  // Available columns for filtering
+  const columns = useMemo(() => {
+    if (data.length === 0) return [];
+    return Object.keys(data[0] || {});
+  }, [data]);
+
+  // Update filtered data whenever raw data or filters change
+  useEffect(() => {
+    applyFilters();
+  }, [data, filters]);
+
+  // Apply filters to data
+  const applyFilters = () => {
+    if (!data.length) {
+      setFilteredData([]);
+      return;
+    }
+
+    if (!filters.length) {
+      setFilteredData(data);
+      return;
+    }
+
+    const result = data.filter((row) => {
+      return filters.every((filter) => {
+        const { column, operation, value } = filter;
+        const cellValue = row[column];
+
+        if (cellValue === undefined || cellValue === null) {
+          return false;
+        }
+
+        switch (operation) {
+          case "equals":
+            return cellValue == value;
+          case "notEquals":
+            return cellValue != value;
+          case "contains":
+            return String(cellValue)
+              .toLowerCase()
+              .includes(String(value).toLowerCase());
+          case "notContains":
+            return !String(cellValue)
+              .toLowerCase()
+              .includes(String(value).toLowerCase());
+          case "startsWith":
+            return String(cellValue)
+              .toLowerCase()
+              .startsWith(String(value).toLowerCase());
+          case "endsWith":
+            return String(cellValue)
+              .toLowerCase()
+              .endsWith(String(value).toLowerCase());
+          case "greaterThan":
+            return Number(cellValue) > Number(value);
+          case "lessThan":
+            return Number(cellValue) < Number(value);
+          case "between":
+            return (
+              Array.isArray(value) &&
+              Number(cellValue) >= value[0] &&
+              Number(cellValue) <= value[1]
+            );
+          case "in":
+            return (
+              Array.isArray(value) &&
+              value.some(
+                (v) =>
+                  String(v).toLowerCase() === String(cellValue).toLowerCase(),
+              )
+            );
+          case "notIn":
+            return (
+              Array.isArray(value) &&
+              !value.some(
+                (v) =>
+                  String(v).toLowerCase() === String(cellValue).toLowerCase(),
+              )
+            );
+          case "isTrue":
+            return Boolean(cellValue) === true;
+          case "isFalse":
+            return Boolean(cellValue) === false;
+          case "dateRange":
+            if (!value.from || !value.to) return true;
+            const dateValue = new Date(cellValue);
+            const fromDate = new Date(value.from);
+            const toDate = new Date(value.to);
+            return dateValue >= fromDate && dateValue <= toDate;
+          case "before":
+            if (!value) return true;
+            return new Date(cellValue) < new Date(value);
+          case "after":
+            if (!value) return true;
+            return new Date(cellValue) > new Date(value);
+          default:
+            return true;
+        }
+      });
+    });
+
+    setFilteredData(result);
+  };
+
+  // Handle filter changes from DataFilters component
+  const handleFilterChange = (newFilters: ColumnFilter[]) => {
+    setFilters(newFilters);
+  };
+
+  // Clear all filters
+  const clearFilters = () => {
+    setFilters([]);
+  };
+
   // Handle file upload
   const handleFileUpload = async (uploadedFile: File) => {
     setFile(uploadedFile);
@@ -61,6 +186,7 @@ export function TransformationPage() {
     try {
       setIsProcessing(true);
       setProgress(20);
+      setFilters([]); // Clear filters when loading new file
 
       // Create Excel transformer to handle the file
       const excelTransformer = new ExcelTransformer();
@@ -98,6 +224,7 @@ export function TransformationPage() {
 
       setProgress(80);
       setData(loadedData);
+      setFilteredData(loadedData); // Initialize filtered data with all data
 
       // Initialize selected columns with all available columns
       if (loadedData.length > 0) {
@@ -186,6 +313,7 @@ export function TransformationPage() {
     try {
       setIsProcessing(true);
       setProgress(20);
+      setFilters([]); // Clear filters when reloading data
 
       // Use just headerRow and not skipRows since skipRows is redundant
       const options: ExcelLoadOptions = { headerRow };
@@ -196,6 +324,7 @@ export function TransformationPage() {
 
       setProgress(80);
       setData(loadedData);
+      setFilteredData(loadedData); // Reset filtered data
 
       // Reset selected columns to all available columns
       if (loadedData.length > 0) {
@@ -243,8 +372,8 @@ export function TransformationPage() {
       // Get the filename without extension
       const outputFilename = file.name.replace(/\.[^/.]+$/, "") + "_clean";
 
-      // Filter data to include only selected columns
-      const filteredData = data.map((row) => {
+      // Use filtered data and only include selected columns
+      const dataToExport = filteredData.map((row) => {
         const newRow: Record<string, any> = {};
         selectedColumns.forEach((col) => {
           newRow[col] = row[col];
@@ -253,7 +382,7 @@ export function TransformationPage() {
       });
 
       // Update the transformer with filtered data
-      transformer.setData(filteredData);
+      transformer.setData(dataToExport);
 
       // Export to Excel
       const blob = transformer.exportToExcel(outputFilename);
@@ -271,7 +400,7 @@ export function TransformationPage() {
       setProgress(100);
       toast({
         title: "Success",
-        description: `File saved as ${outputFilename}.xlsx with ${selectedColumns.length} columns`,
+        description: `File saved as ${outputFilename}.xlsx with ${selectedColumns.length} columns and ${dataToExport.length} rows`,
       });
     } catch (error) {
       console.error("Error downloading file:", error);
@@ -447,6 +576,8 @@ export function TransformationPage() {
                   onClick={() => {
                     setFile(null);
                     setData([]);
+                    setFilteredData([]);
+                    setFilters([]);
                     setSkipRows(0);
                     setHeaderRow(0);
                   }}
@@ -456,15 +587,15 @@ export function TransformationPage() {
                 <Button onClick={handleDownload} disabled={isProcessing}>
                   <Download className="mr-2 size-4" />
                   Download{" "}
-                  {selectedColumns.length > 0
-                    ? `(${selectedColumns.length} columns)`
-                    : ""}
+                  {filteredData.length !== data.length
+                    ? `(${filteredData.length}/${data.length} rows)`
+                    : `(${selectedColumns.length} columns)`}
                 </Button>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              {/* Left column - File info and header controls */}
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+              {/* Left column - File info, header controls, and filters */}
               <div className="space-y-4 md:col-span-1">
                 <Card>
                   <CardHeader>
@@ -486,7 +617,15 @@ export function TransformationPage() {
                       </div>
                       <div>
                         <span className="font-semibold">Rows:</span>{" "}
-                        {data.length}
+                        <Tooltip>
+                          <TooltipTrigger className="underline decoration-dotted">
+                            {filteredData.length}/{data.length}
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {filteredData.length} rows displayed out of{" "}
+                            {data.length} total rows
+                          </TooltipContent>
+                        </Tooltip>
                       </div>
                       <div>
                         <span className="font-semibold">Selected Columns:</span>{" "}
@@ -576,13 +715,41 @@ export function TransformationPage() {
                     </div>
                   </CardContent>
                 </Card>
+
+                {data.length > 0 && (
+                  <>
+                    {/* Data Filters */}
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-lg font-semibold">Data Filters</h3>
+                      {filters.length > 0 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={clearFilters}
+                          className="text-muted-foreground hover:text-foreground"
+                        >
+                          <FilterX className="mr-1 h-4 w-4" /> Clear all
+                        </Button>
+                      )}
+                    </div>
+                    <DataFilters
+                      data={data}
+                      columns={columns}
+                      onFilterChange={handleFilterChange}
+                    />
+                  </>
+                )}
               </div>
 
               {/* Right column - Data preview */}
-              <div className="md:col-span-2">
+              <div className="md:col-span-3">
                 <DataPreview
-                  data={data}
-                  title="Excel Data"
+                  data={filteredData}
+                  title={`Excel Data ${
+                    filteredData.length !== data.length
+                      ? `(${filteredData.length}/${data.length} rows)`
+                      : ""
+                  }`}
                   onColumnsChange={handleColumnSelectionChange}
                 />
 
