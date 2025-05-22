@@ -10,23 +10,28 @@ import {
 
 const inDevelopment = process.env.NODE_ENV === "development";
 
+// Increase memory limits to handle large files
+app.commandLine.appendSwitch("js-flags", "--max-old-space-size=8192");
+
 function createWindow() {
   const preload = path.join(__dirname, "preload.js");
   const mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
+    width: 1200,
+    height: 800,
     webPreferences: {
       devTools: inDevelopment,
       contextIsolation: true,
-      nodeIntegration: true,
+      nodeIntegration: false,
       nodeIntegrationInSubFrames: false,
-
       preload: preload,
     },
-    titleBarStyle: "hidden",
+    frame: true,
   });
+
+  // Register IPC listeners
   registerListeners(mainWindow);
 
+  // Load the app
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
@@ -34,18 +39,36 @@ function createWindow() {
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     );
   }
+
+  // Handle window errors
+  mainWindow.webContents.on("render-process-gone", (event, details) => {
+    console.error("Window crashed:", details);
+  });
+
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (event, errorCode, errorDescription) => {
+      console.error("Failed to load:", errorCode, errorDescription);
+    },
+  );
 }
 
 async function installExtensions() {
+  if (!inDevelopment) return;
+
   try {
     const result = await installExtension(REACT_DEVELOPER_TOOLS);
     console.log(`Extensions installed successfully: ${result.name}`);
-  } catch {
-    console.error("Failed to install extensions");
+  } catch (error) {
+    console.error("Failed to install extensions:", error);
   }
 }
 
-app.whenReady().then(createWindow).then(installExtensions);
+// Handle app events
+app.whenReady().then(() => {
+  createWindow();
+  installExtensions().catch(console.error);
+});
 
 //osX only
 app.on("window-all-closed", () => {
@@ -60,3 +83,12 @@ app.on("activate", () => {
   }
 });
 //osX only ends
+
+// Handle uncaught exceptions
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught Exception:", error);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+});
